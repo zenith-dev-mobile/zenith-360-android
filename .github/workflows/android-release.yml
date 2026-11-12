@@ -1,0 +1,89 @@
+name: Zenith 360 Android Production CI/CD (Signed APK & AAB)
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-sign-release:
+    name: Compile, Obfuscate & Sign Zenith 360 (.AAB + .APK)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout Zenith 360 Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17 (Eclipse Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Configure Gradle with Caching (Auto-provisions Gradle 8.9 if gradlew is absent)
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+          cache-read-only: false
+
+      - name: Decode Base64 Release Keystore from GitHub Secrets
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::Secret KEYSTORE_BASE64 is not set in Repository Secrets!"
+            exit 1
+          fi
+          echo "$KEYSTORE_BASE64" | tr -d '\n\r ' | base64 --decode > "${{ github.workspace }}/app/release-keystore.jks"
+          ls -lh "${{ github.workspace }}/app/release-keystore.jks"
+
+      - name: Build Signed Release Android App Bundle (.AAB) & Signed Release APK (.APK)
+        env:
+          KEYSTORE_FILE_PATH: ${{ github.workspace }}/app/release-keystore.jks
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          gradle --no-daemon clean bundleRelease assembleRelease --stacktrace
+
+      - name: Verify Signed Artifacts & Organize Output Directory
+        run: |
+          mkdir -p "${{ github.workspace }}/signed-dist"
+          cp app/build/outputs/bundle/release/*.aab "${{ github.workspace }}/signed-dist/Zenith360-v1.0.0-release-signed.aab"
+          cp app/build/outputs/apk/release/*.apk "${{ github.workspace }}/signed-dist/Zenith360-v1.0.0-release-signed.apk"
+          cp app/build/outputs/mapping/release/mapping.txt "${{ github.workspace }}/signed-dist/R8-mapping.txt" || true
+          ls -lh "${{ github.workspace }}/signed-dist"
+
+      - name: Upload Signed Google Play App Bundle (.AAB) Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Zenith360-Signed-PlayStore-Bundle-AAB
+          path: ${{ github.workspace }}/signed-dist/Zenith360-v1.0.0-release-signed.aab
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: Upload Signed Direct-Install Release APK & R8 Mapping Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Zenith360-Signed-Release-APK-and-Mapping
+          path: |
+            ${{ github.workspace }}/signed-dist/Zenith360-v1.0.0-release-signed.apk
+            ${{ github.workspace }}/signed-dist/R8-mapping.txt
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: Securely Shred Decoded Keystore from Runner Disk
+        if: always()
+        run: |
+          rm -f "${{ github.workspace }}/app/release-keystore.jks"
