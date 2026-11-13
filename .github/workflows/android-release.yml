@@ -90,10 +90,8 @@ jobs:
           mkdir -p "${{ github.workspace }}/app" "${{ github.workspace }}/signed-dist"
           KS_PATH="${{ github.workspace }}/app/release-keystore.jks"
 
-          CLEAN_PASS=$(echo -n "$RAW_KEY_PASSWORD" | tr -d '
-' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-          CLEAN_ALIAS=$(echo -n "$RAW_KEY_ALIAS" | tr -d '
-' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          CLEAN_PASS=$(echo -n "$RAW_KEY_PASSWORD" | tr -d '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          CLEAN_ALIAS=$(echo -n "$RAW_KEY_ALIAS" | tr -d '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
 
           # Ensure password is at least 6 chars as required by keytool
           if [ ${#CLEAN_PASS} -lt 6 ]; then
@@ -104,9 +102,7 @@ jobs:
           fi
 
           if [ -n "$KEYSTORE_BASE64" ]; then
-            echo "$KEYSTORE_BASE64" | tr -d '
-
- ' | base64 -d > "$KS_PATH" || true
+            echo "$KEYSTORE_BASE64" | tr -d '\n\r ' | base64 -d > "$KS_PATH" || true
           fi
 
           # Test if the decoded keystore can be unlocked with CLEAN_PASS
@@ -114,8 +110,7 @@ jobs:
             echo "Keystore password verified successfully!"
             # Verify if CLEAN_ALIAS exists; if not, auto-detect the actual alias inside the keystore
             if ! keytool -list -keystore "$KS_PATH" -storepass "$CLEAN_PASS" -alias "$CLEAN_ALIAS" > /dev/null 2>&1; then
-              DETECTED_ALIAS=$(keytool -list -v -keystore "$KS_PATH" -storepass "$CLEAN_PASS" | grep "Alias name:" | head -n 1 | awk -F': ' '{print $2}' | tr -d '
- ')
+              DETECTED_ALIAS=$(keytool -list -v -keystore "$KS_PATH" -storepass "$CLEAN_PASS" | grep "Alias name:" | head -n 1 | awk -F': ' '{print $2}' | tr -d '\n')
               if [ -n "$DETECTED_ALIAS" ]; then
                 echo "Auto-detected Keystore Alias: $DETECTED_ALIAS"
                 CLEAN_ALIAS="$DETECTED_ALIAS"
@@ -124,7 +119,7 @@ jobs:
           else
             echo "::warning::KEYSTORE_BASE64 and KEY_PASSWORD did not match (BadPaddingException). Auto-generating a valid RSA-2048 Release Keystore with your KEY_PASSWORD and KEY_ALIAS..."
             rm -f "$KS_PATH"
-            keytool -genkeypair -v               -keystore "$KS_PATH"               -keyalg RSA               -keysize 2048               -validity 10000               -alias "$CLEAN_ALIAS"               -storepass "$CLEAN_PASS"               -keypass "$CLEAN_PASS"               -dname "CN=Zenith 360 Architect, OU=Mobile Engineering, O=Zenith Pro, L=Global, ST=Global, C=US"
+            keytool -genkeypair -v -keystore "$KS_PATH" -keyalg RSA -keysize 2048 -validity 10000 -alias "$CLEAN_ALIAS" -storepass "$CLEAN_PASS" -keypass "$CLEAN_PASS" -dname "CN=Zenith 360 Architect, OU=Mobile Engineering, O=Zenith Pro, L=Global, ST=Global, C=US"
 
             # Save the matching Base64 and .jks into signed-dist so user has the exact matching backup
             base64 -w 0 "$KS_PATH" > "${{ github.workspace }}/signed-dist/MATCHING_KEYSTORE_BASE64.txt"
