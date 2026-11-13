@@ -23,38 +23,47 @@ jobs:
       - name: Checkout Zenith 360 Repository
         uses: actions/checkout@v4
 
-      - name: Prepare Project Tree (Auto-Unzip if Uploaded as ZIP from Phone)
+      - name: Prepare Project Tree & Apply R8 Bug #359385828 Fix
         run: |
-          echo "=== Inspecting Repository Workspace ==="
-          ls -la "${{ github.workspace }}"
-
-          # 1. If the user uploaded Zenith_360_Android_Repository.zip directly via GitHub Mobile Web, extract it!
           if [ ! -f "settings.gradle.kts" ]; then
             ZIP_FILE=$(find . -maxdepth 2 -name "*.zip" | head -n 1)
             if [ -n "$ZIP_FILE" ]; then
-              echo "Found uploaded ZIP archive ($ZIP_FILE) -> Extracting project files..."
+              echo "Extracting uploaded ZIP archive ($ZIP_FILE)..."
               unzip -o "$ZIP_FILE" -d "${{ github.workspace }}"
             fi
           fi
 
-          # 2. If files were uploaded inside a subfolder (e.g. zenith-360-android/settings.gradle.kts), move them to root
           if [ ! -f "settings.gradle.kts" ]; then
             FOUND_SETTINGS=$(find . -maxdepth 3 -name "settings.gradle.kts" | head -n 1)
             if [ -n "$FOUND_SETTINGS" ]; then
               PROJECT_SUBDIR=$(dirname "$FOUND_SETTINGS")
-              echo "Moving project files from $PROJECT_SUBDIR to workspace root..."
               cp -r "$PROJECT_SUBDIR"/. "${{ github.workspace }}/"
             fi
           fi
 
-          # 3. Ensure app/ directory exists before Keystore decoding
           mkdir -p "${{ github.workspace }}/app"
 
-          # 4. Verify Android project files exist in repository
-          if [ ! -f "settings.gradle.kts" ] || [ ! -f "app/build.gradle.kts" ]; then
-            echo "::error::የአንድሮይድ ፕሮጀክት ፋይሎቹ (app/, settings.gradle.kts) በ GitHub ሪፖዚቶሪዎ ውስጥ አልተገኙም! እባክዎ Zenith_360_Android_Repository.zip የሚለውን ፋይል ወደ ሪፖዚቶሪዎ Upload ያድርጉ።"
-            exit 1
-          fi
+          # Fix R8 8.5.35 ConcurrentModificationException (Google Issue #359385828 / dotnet #9861)
+          # caused by '-keep class com.google.crypto.tink.** { *; }' and deferred annotations
+          cat << 'EOF' > "${{ github.workspace }}/app/proguard-rules.pro"
+          -dontskipnonpubliclibraryclasses
+          -dontwarn com.google.android.gms.**
+          -dontwarn com.google.crypto.tink.**
+          -keep class * extends androidx.room.RoomDatabase { *; }
+          -keep @androidx.room.Entity class * { *; }
+          -keep @androidx.room.Dao class * { *; }
+          -keep class dagger.hilt.** { *; }
+          -keep class javax.inject.** { *; }
+          -keep public class com.google.android.gms.ads.** { public *; }
+          -keep public class com.google.ads.** { public *; }
+          -keep public class com.google.android.ump.** { public *; }
+          -keepnames class kotlinx.coroutines.internal.MainDispatcherFactory {}
+          -keepnames class kotlinx.coroutines.CoroutineExceptionHandler {}
+          -keepclassmembers class kotlinx.coroutines.** { volatile <fields>; }
+          -keepattributes SourceFile,LineNumberTable,Signature,InnerClasses,EnclosingMethod
+          EOF
+
+          sed -i 's/android.enableR8.fullMode=true/android.enableR8.fullMode=false/g' "${{ github.workspace }}/gradle.properties" || true
 
       - name: Set up JDK 17 (Eclipse Temurin)
         uses: actions/setup-java@v4
@@ -88,10 +97,12 @@ jobs:
 
       - name: Build Signed Release Android App Bundle (.AAB) & Signed Release APK (.APK)
         env:
-          KEYSTORE_FILE_PATH: ${{ github.workspace }}/app/release-keystore.jks
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          RAW_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          RAW_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         run: |
+          export KEYSTORE_FILE_PATH="${{ github.workspace }}/app/release-keystore.jks"
+          export KEY_PASSWORD=$(echo -n "$RAW_KEY_PASSWORD" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          export KEY_ALIAS=$(echo -n "$RAW_KEY_ALIAS" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
           gradle --no-daemon clean bundleRelease assembleRelease --stacktrace
 
       - name: Verify Signed Artifacts & Organize Output Directory
