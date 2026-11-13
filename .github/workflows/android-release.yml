@@ -23,6 +23,39 @@ jobs:
       - name: Checkout Zenith 360 Repository
         uses: actions/checkout@v4
 
+      - name: Prepare Project Tree (Auto-Unzip if Uploaded as ZIP from Phone)
+        run: |
+          echo "=== Inspecting Repository Workspace ==="
+          ls -la "${{ github.workspace }}"
+
+          # 1. If the user uploaded Zenith_360_Android_Repository.zip directly via GitHub Mobile Web, extract it!
+          if [ ! -f "settings.gradle.kts" ]; then
+            ZIP_FILE=$(find . -maxdepth 2 -name "*.zip" | head -n 1)
+            if [ -n "$ZIP_FILE" ]; then
+              echo "Found uploaded ZIP archive ($ZIP_FILE) -> Extracting project files..."
+              unzip -o "$ZIP_FILE" -d "${{ github.workspace }}"
+            fi
+          fi
+
+          # 2. If files were uploaded inside a subfolder (e.g. zenith-360-android/settings.gradle.kts), move them to root
+          if [ ! -f "settings.gradle.kts" ]; then
+            FOUND_SETTINGS=$(find . -maxdepth 3 -name "settings.gradle.kts" | head -n 1)
+            if [ -n "$FOUND_SETTINGS" ]; then
+              PROJECT_SUBDIR=$(dirname "$FOUND_SETTINGS")
+              echo "Moving project files from $PROJECT_SUBDIR to workspace root..."
+              cp -r "$PROJECT_SUBDIR"/. "${{ github.workspace }}/"
+            fi
+          fi
+
+          # 3. Ensure app/ directory exists before Keystore decoding
+          mkdir -p "${{ github.workspace }}/app"
+
+          # 4. Verify Android project files exist in repository
+          if [ ! -f "settings.gradle.kts" ] || [ ! -f "app/build.gradle.kts" ]; then
+            echo "::error::የአንድሮይድ ፕሮጀክት ፋይሎቹ (app/, settings.gradle.kts) በ GitHub ሪፖዚቶሪዎ ውስጥ አልተገኙም! እባክዎ Zenith_360_Android_Repository.zip የሚለውን ፋይል ወደ ሪፖዚቶሪዎ Upload ያድርጉ።"
+            exit 1
+          fi
+
       - name: Set up JDK 17 (Eclipse Temurin)
         uses: actions/setup-java@v4
         with:
@@ -49,7 +82,8 @@ jobs:
             echo "::error::Secret KEYSTORE_BASE64 is not set in Repository Secrets!"
             exit 1
           fi
-          echo "$KEYSTORE_BASE64" | tr -d '\n\r ' | base64 --decode > "${{ github.workspace }}/app/release-keystore.jks"
+          mkdir -p "${{ github.workspace }}/app"
+          echo "$KEYSTORE_BASE64" | tr -d '\n\r ' | base64 -d > "${{ github.workspace }}/app/release-keystore.jks"
           ls -lh "${{ github.workspace }}/app/release-keystore.jks"
 
       - name: Build Signed Release Android App Bundle (.AAB) & Signed Release APK (.APK)
